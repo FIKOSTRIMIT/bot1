@@ -83,6 +83,7 @@ async def main():
     URL_WEB_APP = 'https://fikostrimit.github.io/bot1/'
     logging.basicConfig(level=logging.INFO)
     await dp.start_polling(bot)
+URL_WEB_APP = 'https://fikostrimit.github.io/bot1/'
 
 if __name__ == "__main__":
     asyncio.run(main())
