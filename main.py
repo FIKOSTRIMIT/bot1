@@ -1,3 +1,33 @@
+import os
+from aiohttp import web
+
+# Функция-пустышка для порта
+async def handle(request):
+    return web.Response(text="Bot is running")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Render сам подставляет порт в переменную окружения PORT
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+# В функции main добавь запуск сервера:
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    
+    # ЗАПУСКАЕМ ВЕБ-СЕРВЕР ДЛЯ RENDER
+    asyncio.create_task(start_web_server())
+    
+    await dp.start_polling(bot)
+
+
+
+
+
 import json
 import asyncio
 import logging
