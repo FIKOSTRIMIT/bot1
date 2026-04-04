@@ -79,6 +79,8 @@ async def handle_web_app_data(message: types.Message):
         print(f"DEBUG ERROR: {e}")
 
 async def main():
+
+    URL_WEB_APP = 'https://fikostrimit.github.io/bot1/'
     logging.basicConfig(level=logging.INFO)
     await dp.start_polling(bot)
 
