@@ -24,10 +24,6 @@ async def main():
     
     await dp.start_polling(bot)
 
-
-
-
-
 import json
 import asyncio
 import logging
