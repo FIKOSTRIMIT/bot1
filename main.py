@@ -1,7 +1,4 @@
-import os, asyncio, logging, smtplib, socket
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from aiohttp import web
+import asyncio, logging, aiohttp
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -11,8 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- КОНФИГУРАЦИЯ ---
 API_TOKEN = '8777068569:AAE5iGFl9_EViPqopOoCCDDIleWPepXdG6M'
-SMTP_USER = 'playerok.messagerobot@gmail.com'
-SMTP_PASS = 'zpmjyqkmrnshvvln' 
+GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwpIshcyQXZUWnrQvDukQ8K2KLfwoMB5sINRtx5BYn6Z69gSbWrOz5bmzcBL5EqUJEQ/exec'
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -24,53 +20,33 @@ class OrderState(StatesGroup):
     waiting_item = State()
     waiting_buyer = State()
 
-# --- ШАБЛОН ПИСЬМА ---
 def get_html_template(seller, amount, item, buyer):
-    s = seller.replace("@", "")
-    b = buyer.replace("@", "")
+    s = seller.replace("@", ""); b = buyer.replace("@", "")
     return f"""
-    <div style="background:#0a0a0a; color:white; padding:20px; font-family:sans-serif; max-width:420px; margin:0 auto; border-radius:20px; border: 1px solid #333;">
-        <div style="background:linear-gradient(90deg, #3291ff, #00c2ff); padding:20px; border-radius:15px;">
+    <div style="background:#0a0a0a; color:white; padding:20px; font-family:sans-serif; max-width:400px; margin:0 auto; border-radius:20px; border: 1px solid #262626;">
+        <div style="background:linear-gradient(90deg, #3291ff, #00c2ff); padding:20px; border-radius:15px; text-align:center;">
             <h2 style="margin:0; color:white;">Playerok • Сделка</h2>
         </div>
         <div style="background:#141414; padding:20px; border-radius:15px; margin-top:10px; border:1px solid #262626;">
             <p style="color:#828282;">Здравствуйте, @{s}</p>
-            <h1 style="color:#00a651; font-size:32px; margin: 10px 0;">{amount} ₽</h1>
-            <p style="margin: 5px 0;">Товар: <b style="color:white;">{item}</b></p>
-            <p style="margin: 5px 0;">Покупатель: <b style="color:white;">@{b}</b></p>
+            <div style="color:#00a651; font-size:32px; font-weight:bold; margin:15px 0;">{amount} ₽</div>
+            <p>Товар: <b style="color:white;">{item}</b></p>
+            <p>Покупатель: <b style="color:white;">@{b}</b></p>
         </div>
     </div>
     """
 
-# --- ФУНКЦИЯ ОТПРАВКИ (С ОБХОДОМ БЛОКИРОВОК) ---
-def send_email(to_email, seller, amount, item, buyer):
-    msg = MIMEMultipart()
-    msg['Subject'] = "Заказ №4523FDKG33"
-    msg['From'] = f"Playerok Support <{SMTP_USER}>"
-    msg['To'] = to_email
-    msg.attach(MIMEText(get_html_template(seller, amount, item, buyer), 'html'))
-    
-    # Принудительно используем IPv4, чтобы избежать Network Unreachable
-    instance = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20)
-    try:
-        instance.login(SMTP_USER, SMTP_PASS)
-        instance.send_message(msg)
-    finally:
-        instance.quit()
-
-def get_back_kb(step):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data=f"back_{step}")
-    return kb.as_markup()
-
-# --- ЛОГИКА БОТА ---
+async def send_via_google(email, body):
+    async with aiohttp.ClientSession() as session:
+        payload = {"email": email, "body": body}
+        async with session.post(GOOGLE_SCRIPT_URL, json=payload, timeout=30) as resp:
+            return await resp.text()
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🚀 Создать уведомление", callback_data="start_order")
-    await message.answer("✅ **Панель Playerok готова.**", reply_markup=kb.as_markup())
+    kb = InlineKeyboardBuilder().button(text="🚀 Создать уведомление", callback_data="start_order").as_markup()
+    await message.answer("✅ Бот запущен на Render (без прокси).", reply_markup=kb)
 
 @dp.callback_query(F.data == "start_order")
 async def start_order(callback: types.CallbackQuery, state: FSMContext):
@@ -81,64 +57,41 @@ async def start_order(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(OrderState.waiting_email)
 async def step1(m: types.Message, state: FSMContext):
     await state.update_data(email=m.text)
-    await m.answer(f"✅ Email: `{m.text}`\n2️⃣ Введите **Ник продавца**:", reply_markup=get_back_kb("email"))
+    await m.answer(f"✅ Email: {m.text}\n2️⃣ Ник продавца:")
     await state.set_state(OrderState.waiting_seller)
 
 @dp.message(OrderState.waiting_seller)
 async def step2(m: types.Message, state: FSMContext):
     await state.update_data(seller=m.text)
-    await m.answer(f"✅ Продавец: `{m.text}`\n3️⃣ Введите **Сумму**:", reply_markup=get_back_kb("seller"))
+    await m.answer(f"✅ Продавец: {m.text}\n3️⃣ Сумма:")
     await state.set_state(OrderState.waiting_amount)
 
 @dp.message(OrderState.waiting_amount)
 async def step3(m: types.Message, state: FSMContext):
     await state.update_data(amount=m.text)
-    await m.answer(f"✅ Сумма: `{m.text}` ₽\n4️⃣ Введите **Название товара**:", reply_markup=get_back_kb("amount"))
+    await m.answer(f"✅ Сумма: {m.text} ₽\n4️⃣ Товар:")
     await state.set_state(OrderState.waiting_item)
 
 @dp.message(OrderState.waiting_item)
 async def step4(m: types.Message, state: FSMContext):
     await state.update_data(item=m.text)
-    await m.answer(f"✅ Товар: `{m.text}`\n5️⃣ Введите **Ник покупателя**:", reply_markup=get_back_kb("item"))
+    await m.answer("5️⃣ Ник покупателя:")
     await state.set_state(OrderState.waiting_buyer)
 
 @dp.message(OrderState.waiting_buyer)
 async def step5_final(m: types.Message, state: FSMContext):
     data = await state.get_data()
-    await m.answer("⏳ **Отправка письма...**")
+    await m.answer("⏳ **Отправка через Google...**")
     try:
-        # Запускаем в отдельном потоке, чтобы не вешать бота
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, send_email, data['email'], data['seller'], data['amount'], data['item'], m.text)
-        await m.answer(f"✅ **Успешно!**\nПисьмо отправлено на `{data['email']}`")
+        html_body = get_html_template(data['seller'], data['amount'], data['item'], m.text)
+        result = await send_via_google(data['email'], html_body)
+        await m.answer(f"✅ **Результат:** {result}")
     except Exception as e:
-        await m.answer(f"❌ Ошибка сети: {e}\n\nПопробуйте сменить хостинг или проверьте настройки почты.")
+        await m.answer(f"❌ Ошибка: {e}")
     await state.clear()
-
-@dp.callback_query(F.data.startswith("back_"))
-async def go_back(callback: types.CallbackQuery, state: FSMContext):
-    step = callback.data.split("_")[1]
-    if step == "email":
-        await callback.message.answer("1️⃣ Введите **Email** получателя:")
-        await state.set_state(OrderState.waiting_email)
-    elif step == "seller":
-        await callback.message.answer("2️⃣ Введите **Ник продавца**:")
-        await state.set_state(OrderState.waiting_seller)
-    elif step == "amount":
-        await callback.message.answer("3️⃣ Введите **Сумму**:")
-        await state.set_state(OrderState.waiting_amount)
-    elif step == "item":
-        await callback.message.answer("4️⃣ Введите **Название товара**:")
-        await state.set_state(OrderState.waiting_item)
-    await callback.answer()
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    app = web.Application()
-    app.router.add_get('/', lambda r: web.Response(text="Live"))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    await web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8080))).start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
