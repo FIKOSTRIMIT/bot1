@@ -1,4 +1,4 @@
-import os, asyncio, logging, smtplib
+import os, asyncio, logging, smtplib, socket
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from aiohttp import web
@@ -29,20 +29,20 @@ def get_html_template(seller, amount, item, buyer):
     s = seller.replace("@", "")
     b = buyer.replace("@", "")
     return f"""
-    <div style="background:#0a0a0a; color:white; padding:20px; font-family:sans-serif; max-width:420px; margin:0 auto; border-radius:20px;">
+    <div style="background:#0a0a0a; color:white; padding:20px; font-family:sans-serif; max-width:420px; margin:0 auto; border-radius:20px; border: 1px solid #333;">
         <div style="background:linear-gradient(90deg, #3291ff, #00c2ff); padding:20px; border-radius:15px;">
             <h2 style="margin:0; color:white;">Playerok • Сделка</h2>
         </div>
         <div style="background:#141414; padding:20px; border-radius:15px; margin-top:10px; border:1px solid #262626;">
             <p style="color:#828282;">Здравствуйте, @{s}</p>
-            <h1 style="color:#00a651; font-size:32px;">{amount} ₽</h1>
-            <p>Товар: <b style="color:white;">{item}</b></p>
-            <p>Покупатель: <b style="color:white;">@{b}</b></p>
+            <h1 style="color:#00a651; font-size:32px; margin: 10px 0;">{amount} ₽</h1>
+            <p style="margin: 5px 0;">Товар: <b style="color:white;">{item}</b></p>
+            <p style="margin: 5px 0;">Покупатель: <b style="color:white;">@{b}</b></p>
         </div>
     </div>
     """
 
-# --- ФУНКЦИЯ ОТПРАВКИ (Используем порт 465 SSL) ---
+# --- ФУНКЦИЯ ОТПРАВКИ (С ОБХОДОМ БЛОКИРОВОК) ---
 def send_email(to_email, seller, amount, item, buyer):
     msg = MIMEMultipart()
     msg['Subject'] = "Заказ №4523FDKG33"
@@ -50,10 +50,13 @@ def send_email(to_email, seller, amount, item, buyer):
     msg['To'] = to_email
     msg.attach(MIMEText(get_html_template(seller, amount, item, buyer), 'html'))
     
-    # Подключаемся через SMTP_SSL на порт 465
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as server:
-        server.login(SMTP_USER, SMTP_PASS)
-        server.send_message(msg)
+    # Принудительно используем IPv4, чтобы избежать Network Unreachable
+    instance = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20)
+    try:
+        instance.login(SMTP_USER, SMTP_PASS)
+        instance.send_message(msg)
+    finally:
+        instance.quit()
 
 def get_back_kb(step):
     kb = InlineKeyboardBuilder()
@@ -67,7 +70,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     kb = InlineKeyboardBuilder()
     kb.button(text="🚀 Создать уведомление", callback_data="start_order")
-    await message.answer("✅ Панель готова к работе. Нажми кнопку ниже:", reply_markup=kb.as_markup())
+    await message.answer("✅ **Панель Playerok готова.**", reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "start_order")
 async def start_order(callback: types.CallbackQuery, state: FSMContext):
@@ -78,25 +81,25 @@ async def start_order(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(OrderState.waiting_email)
 async def step1(m: types.Message, state: FSMContext):
     await state.update_data(email=m.text)
-    await m.answer(f"✅ Email: {m.text}\n2️⃣ Введите **Ник продавца**:", reply_markup=get_back_kb("email"))
+    await m.answer(f"✅ Email: `{m.text}`\n2️⃣ Введите **Ник продавца**:", reply_markup=get_back_kb("email"))
     await state.set_state(OrderState.waiting_seller)
 
 @dp.message(OrderState.waiting_seller)
 async def step2(m: types.Message, state: FSMContext):
     await state.update_data(seller=m.text)
-    await m.answer(f"✅ Продавец: {m.text}\n3️⃣ Введите **Сумму**:", reply_markup=get_back_kb("seller"))
+    await m.answer(f"✅ Продавец: `{m.text}`\n3️⃣ Введите **Сумму**:", reply_markup=get_back_kb("seller"))
     await state.set_state(OrderState.waiting_amount)
 
 @dp.message(OrderState.waiting_amount)
 async def step3(m: types.Message, state: FSMContext):
     await state.update_data(amount=m.text)
-    await m.answer(f"✅ Сумма: {m.text} ₽\n4️⃣ Введите **Название товара**:", reply_markup=get_back_kb("amount"))
+    await m.answer(f"✅ Сумма: `{m.text}` ₽\n4️⃣ Введите **Название товара**:", reply_markup=get_back_kb("amount"))
     await state.set_state(OrderState.waiting_item)
 
 @dp.message(OrderState.waiting_item)
 async def step4(m: types.Message, state: FSMContext):
     await state.update_data(item=m.text)
-    await m.answer(f"✅ Товар: {m.text}\n5️⃣ Введите **Ник покупателя**:", reply_markup=get_back_kb("item"))
+    await m.answer(f"✅ Товар: `{m.text}`\n5️⃣ Введите **Ник покупателя**:", reply_markup=get_back_kb("item"))
     await state.set_state(OrderState.waiting_buyer)
 
 @dp.message(OrderState.waiting_buyer)
@@ -104,10 +107,12 @@ async def step5_final(m: types.Message, state: FSMContext):
     data = await state.get_data()
     await m.answer("⏳ **Отправка письма...**")
     try:
-        send_email(data['email'], data['seller'], data['amount'], data['item'], m.text)
+        # Запускаем в отдельном потоке, чтобы не вешать бота
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, send_email, data['email'], data['seller'], data['amount'], data['item'], m.text)
         await m.answer(f"✅ **Успешно!**\nПисьмо отправлено на `{data['email']}`")
     except Exception as e:
-        await m.answer(f"❌ Ошибка: {e}\n\nПроверь правильность Email или попробуй позже.")
+        await m.answer(f"❌ Ошибка сети: {e}\n\nПопробуйте сменить хостинг или проверьте настройки почты.")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("back_"))
