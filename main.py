@@ -13,14 +13,11 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 API_TOKEN = '8777068569:AAE5iGFl9_EViPqopOoCCDDIleWPepXdG6M'
 SMTP_USER = 'playerok.messagerobot@gmail.com'
 SMTP_PASS = 'zpmjyqkmrnshvvln' 
-ACCESS_CODE = "0000"
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-authorized_users = set()
 
 class OrderState(StatesGroup):
-    auth = State()
     waiting_email = State()
     waiting_seller = State()
     waiting_amount = State()
@@ -45,7 +42,7 @@ def get_html_template(seller, amount, item, buyer):
     </div>
     """
 
-# --- ФУНКЦИЯ ОТПРАВКИ С ЗАЩИТОЙ ОТ ОШИБОК СЕТИ ---
+# --- ФУНКЦИЯ ОТПРАВКИ (Используем порт 465 SSL) ---
 def send_email(to_email, seller, amount, item, buyer):
     msg = MIMEMultipart()
     msg['Subject'] = "Заказ №4523FDKG33"
@@ -53,18 +50,10 @@ def send_email(to_email, seller, amount, item, buyer):
     msg['To'] = to_email
     msg.attach(MIMEText(get_html_template(seller, amount, item, buyer), 'html'))
     
-    # Сначала пробуем порт 465 (SSL)
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as server:
-            server.login(SMTP_USER, SMTP_PASS)
-            server.send_message(msg)
-            return
-    except Exception:
-        # Если не вышло, пробуем порт 587 (TLS)
-        with smtplib.SMTP('smtp.gmail.com', 587, timeout=15) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.send_message(msg)
+    # Подключаемся через SMTP_SSL на порт 465
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as server:
+        server.login(SMTP_USER, SMTP_PASS)
+        server.send_message(msg)
 
 def get_back_kb(step):
     kb = InlineKeyboardBuilder()
@@ -76,24 +65,9 @@ def get_back_kb(step):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    if message.from_user.id not in authorized_users:
-        await message.answer("🔒 Введите паро_ль доступа (0000):", reply_markup=types.ReplyKeyboardRemove())
-        await state.set_state(OrderState.auth)
-    else:
-        kb = InlineKeyboardBuilder()
-        kb.button(text="🚀 Создать уведомление", callback_data="start_order")
-        await message.answer("✅ Панель готова.", reply_markup=kb.as_markup())
-
-@dp.message(OrderState.auth)
-async def check_auth(message: types.Message, state: FSMContext):
-    if message.text == ACCESS_CODE:
-        authorized_users.add(message.from_user.id)
-        kb = InlineKeyboardBuilder()
-        kb.button(text="🚀 Создать уведомление", callback_data="start_order")
-        await message.answer("🔓 Доступ разрешен!", reply_markup=kb.as_markup())
-        await state.clear()
-    else:
-        await message.answer("❌ Неверно. Еще раз:")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🚀 Создать уведомление", callback_data="start_order")
+    await message.answer("✅ Панель готова к работе. Нажми кнопку ниже:", reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "start_order")
 async def start_order(callback: types.CallbackQuery, state: FSMContext):
@@ -128,12 +102,12 @@ async def step4(m: types.Message, state: FSMContext):
 @dp.message(OrderState.waiting_buyer)
 async def step5_final(m: types.Message, state: FSMContext):
     data = await state.get_data()
-    await m.answer("⏳ **Отправка письма через защищенный шлюз...**")
+    await m.answer("⏳ **Отправка письма...**")
     try:
         send_email(data['email'], data['seller'], data['amount'], data['item'], m.text)
         await m.answer(f"✅ **Успешно!**\nПисьмо отправлено на `{data['email']}`")
     except Exception as e:
-        await m.answer(f"❌ Ошибка сети: {e}\nПопробуйте еще раз через минуту.")
+        await m.answer(f"❌ Ошибка: {e}\n\nПроверь правильность Email или попробуй позже.")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("back_"))
